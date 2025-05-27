@@ -1,0 +1,309 @@
+---
+title: "FitCurve"
+author: "QianqianHuang"
+date: "2025-05-26"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(dplyr)
+library(magrittr)
+library(minpack.lm)
+library(nlme)
+library(brms)
+library(ggplot2)
+library(lme4)
+library(performance)
+library(broom)      # for glance()
+library(loo)        # for LOO-AIC (brms)
+```
+
+## read file
+
+```{r, include=TRUE, echo=TRUE}
+data <- read.csv("../sow_FI_weather.csv", header = T)
+data_P1 <- data %>%
+  filter(Parity == "P1") %>%
+  select(SowID, Day, FI) %>%
+  filter(!is.na(FI), !is.na(Day), !is.na(SowID)) %>%
+  mutate(SowID = factor(SowID)) 
+```
+
+## check how many data in each lactation day
+
+```{r, include=TRUE, echo=TRUE}
+print(data_P1 %>%
+  group_by(Day) %>%
+  summarise(
+    Count = n(),
+    Mean_FI = mean(FI, na.rm = TRUE),
+    SD_FI = sd(FI, na.rm = TRUE)
+  ), n=100)
+```
+Since the record from Day 23-25 lower than 10, remove them.
+
+```{r, include=TRUE, echo=TRUE}
+data_P1_trimmed <- data_P1 %>%
+  filter(Day <= 22)
+```
+
+Plot the original mean pattern.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+ggplot(data_P1, aes(x = Day, y = FI)) +
+  geom_jitter(alpha = 0.2, width = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  geom_vline(xintercept = 22, linetype = "dashed", color = "red") +
+  annotate("text", x = 22, y = max(data_P1$FI), label = "Cutoff at Day 22", hjust = -0.1) +
+  theme_minimal()
+```
+
+## ---- Method 1: GMM -----##
+**DFIi,t = [DFI0+(DFIA-DFI0)(t/k)^c]/[1+(t/k)^c]**
+DFI0: predicted DFI at day 0, DFIA is asymptotic DFI
+
+
+**1. Fixed-effects model**
+
+```{r, include=TRUE, echo=TRUE}
+nlsLM_model <- nlsLM(
+  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  data = data_P1_trimmed,
+  start = list(DFI0 = 3, DFIA = 12, k = 6, c = 1.5)
+)
+coef(nlsLM_model) 
+```
+
+**2. Model with DFIA as a random effect**
+
+Start value get from the coef of previous fixed-effects model.
+Add lower bound to avoid bad prior sample.
+
+```{r, include=TRUE, echo=TRUE}
+priors1 <- c(
+  prior(normal(7, 2), nlpar = "DFI0", lb = 0),
+  prior(normal(26, 3), nlpar = "DFIA", lb = 0),
+  prior(normal(10, 2), nlpar = "k", lb = 0.1),
+  prior(normal(3, 1), nlpar = "c", lb = 0.5),
+  prior(exponential(1), class = "sd", group = "SowID", nlpar = "DFIA")
+)
+```
+
+
+```{r, include=TRUE, echo=TRUE}
+nlme_model <- nlme(
+  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  data = data_P1_trimmed,
+  fixed = DFI0 + DFIA + k + c ~ 1,
+  random = DFIA ~ 1 | SowID,
+  start = c(DFI0 = 7.72, DFIA = 26.00, k = 10.20, c = 3.23)
+)
+summary(nlme_model)
+```
+
+```{r, include=TRUE, echo=TRUE}
+form <- bf(
+  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  DFI0 + k + c ~ 1,                # fixed effect
+  DFIA ~ 1 + (1 | SowID),          # only DFIA random
+  nl = TRUE
+)
+
+fit <- brm(
+  formula = form,
+  data = data_P1_trimmed,
+  family = gaussian(),
+  prior = priors1,
+  #sample_prior = "only",  # only sample prior to test whether can get stable prior
+  chains = 4, cores = 2,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(fit)
+```
+**3. Model with DFIA and C as random effects**
+
+```{r, include=TRUE, echo=TRUE}
+priors2 <- c(
+  prior(normal(6.6, 0.5), nlpar = "DFI0", lb = 0),
+  prior(normal(27.5, 1.5), nlpar = "DFIA", lb = 0),
+  prior(normal(11, 1), nlpar = "k", lb = 0.1),
+  prior(normal(2, 0.3), nlpar = "c", lb = 0.5),
+  prior(exponential(1), class = "sd", group = "SowID", nlpar = "DFIA"),
+  prior(exponential(1), class = "sd", group = "SowID", nlpar = "c")
+)
+```
+
+```{r, include=TRUE, echo=TRUE}
+form2 <- bf(
+  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  DFI0 + k ~ 1,                # fixed effect
+  DFIA + c ~ 1 + (1 | SowID),          # only DFIA random
+  nl = TRUE
+)
+
+fit2 <- brm(
+  formula = form2,
+  data = data_P1_trimmed,
+  family = gaussian(),
+  prior = priors2,
+  #sample_prior = "only",  # only sample prior to test whether can get stable prior
+  chains = 4, cores = 2,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(fit2)
+```
+
+### compare the fit curve VS real data
+
+```{r, include=TRUE, echo=TRUE}
+pig_id <- 183553
+pig_data <- data_P1_trimmed %>% filter(SowID == pig_id)
+newdata <- data.frame(
+  Day = seq(min(pig_data$Day), max(pig_data$Day), length.out = 100),
+  SowID = factor(pig_id, levels = levels(data_P1_trimmed$SowID))
+)
+
+pred <- fitted(fit2, newdata = newdata, re_formula = NULL, summary = TRUE)
+newdata$FI_pred <- pred[, "Estimate"]
+newdata$Lower <- pred[, "Q2.5"]
+newdata$Upper <- pred[, "Q97.5"]
+
+ggplot() +
+  geom_line(data = pig_data, aes(x = Day, y = FI), color = "black", size = 1) +
+  geom_line(data = newdata, aes(x = Day, y = FI_pred), color = "blue", size = 1) +
+  # CI
+  geom_ribbon(data = newdata, aes(x = Day, ymin = Lower, ymax = Upper), alpha = 0.2, fill = "blue") +
+  labs(title = paste("Model Prediction vs Actual for SowID =", pig_id),
+       x = "Day", y = "FI") +
+  theme_minimal()
+```
+
+
+
+## ---- Method 2: polynomial -----##
+**DFIi,t = t + t^2 +t^3 +t^4**
+
+Center Day by minus mean value to avoid multicollinearity issue.
+
+```{r, include=TRUE, echo=TRUE}
+#data_P1_trimmed$Day_c <- scale(data_P1_trimmed$Day, center = TRUE, scale = FALSE)
+poly_terms <- poly(data_P1_trimmed$Day, degree = 4, raw = FALSE)
+data_P1_trimmed$t1 <- poly_terms[, 1]
+data_P1_trimmed$t2 <- poly_terms[, 2]
+data_P1_trimmed$t3 <- poly_terms[, 3]
+data_P1_trimmed$t4 <- poly_terms[, 4]
+```
+
+
+**1. fixed-effects model**
+```{r, include=TRUE, echo=TRUE}
+fit_fixed <- lm(FI ~ t1 + t2 + t3 + t4, data = data_P1_trimmed)
+summary(fit_fixed)
+```
+
+**2. random model with t1 as random**
+
+```{r, include=TRUE, echo=TRUE}
+fit_r1 <- lmer(FI ~ t1 + t2 + t3 + t4 + (0 + t1 | SowID), data = data_P1_trimmed)
+summary(fit_r1)
+```
+
+**3. random model with t1,t2 as random**
+
+```{r, include=TRUE, echo=TRUE}
+fit_r2 <- lmer(FI ~ t1 + t2 + t3 + t4 + (0 + t1 + t2 | SowID), data = data_P1_trimmed)
+summary(fit_r2)
+```
+
+**4. random model with t1,t2,t3 as random**
+
+```{r, include=TRUE, echo=TRUE}
+fit_r3 <- lmer(FI ~ t1 + t2 + t3 + t4 + (0 + t1 + t2 + t3 | SowID), data = data_P1_trimmed)
+summary(fit_r3)
+```
+
+## compare the model
+
+```{r, include=FALSE, echo=FALSE}
+get_metrics <- function(model, type = c("lm", "lmer", "nlsLM", "brms")) {
+  type <- match.arg(type)
+
+  if (type == "lm") {
+    r <- residuals(model)
+    RSD <- sqrt(mean(r^2))
+    AIC_val <- AIC(model)
+    R2_val <- summary(model)$r.squared
+
+  } else if (type == "lmer") {
+    r <- residuals(model)
+    RSD <- sqrt(mean(r^2))
+    AIC_val <- AIC(model)
+    R2_val <- r2(model)$R2_marginal  # 使用 performance::r2
+
+  } else if (type == "nlsLM") {
+    r <- residuals(model)
+    RSD <- sqrt(mean(r^2))
+    AIC_val <- AIC(model)
+    y <- model$m$lhs()
+    yhat <- fitted(model)
+    R2_val <- 1 - sum((y - yhat)^2) / sum((y - mean(y))^2)
+
+  } else if (type == "brms") {
+    y <- model$data$FI
+    yhat <- fitted(model)[, "Estimate"]
+    r <- y - yhat
+    RSD <- sqrt(mean(r^2))
+    AIC_val <- -2 * loo(model)$estimates["elpd_loo", "Estimate"]
+    R2_val <- bayes_R2(model)[1, "Estimate"]
+  }
+
+  return(c(RSD = RSD, AIC = AIC_val, R2 = R2_val))
+}
+```
+
+
+```{r, include=TRUE, echo=TRUE}
+results <- data.frame(
+  Model = c(
+    "nlsLM_model",
+    "brms: fit (DFIA random)",
+    "brms: fit2 (DFIA + c random)",
+    "lm: fit_fixed (poly)",
+    "lmer: fit_r1 (t1)",
+    "lmer: fit_r2 (t1 + t2)",
+    "lmer: fit_r3 (t1 + t2 + t3)"
+  ),
+  t(sapply(list(
+    nlsLM_model,
+    fit,
+    fit2,
+    fit_fixed,
+    fit_r1,
+    fit_r2,
+    fit_r3
+  ), FUN = function(m) {
+    get_metrics(m,
+      type = if (inherits(m, "brmsfit")) "brms"
+      else if (inherits(m, "lmerMod")) "lmer"
+      else if (inherits(m, "lm")) "lm"
+      else if (inherits(m, "nls")) "nlsLM"
+    )
+  }))
+)
+results_rounded <- data.frame(
+  Model = results$Model,
+  round(results[, -1], 4)  # 只对数值列做 round
+)
+print(results_rounded)
+```
+
+
+```{r, include=TRUE, echo=TRUE}
+
+```
+
+
