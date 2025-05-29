@@ -9,33 +9,36 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyr)
 library(dplyr)
+library(tibble)
 library(magrittr)
 library(minpack.lm)
 library(nlme)
 library(brms)
 library(ggplot2)
 library(lme4)
+library(lmerTest)   # for calculate p-value in model with random effects
 library(performance)
 library(broom)      # for glance()
 library(loo)        # for LOO-AIC (brms)
+library(emmeans)
 ```
 
 ## read file
 
 ```{r, include=TRUE, echo=TRUE}
 data <- read.csv("../sow_FI_weather.csv", header = T)
-data_P1 <- data %>%
-  filter(Parity == "P1") %>%
-  select(SowID, Day, FI) %>%
-  filter(!is.na(FI), !is.na(Day), !is.na(SowID)) %>%
-  mutate(SowID = factor(SowID)) 
+#data_P1 <- data %>%
+#  filter(Parity == "P1") %>%
+#  select(SowID, Day, FI) %>%
+#  filter(!is.na(FI), !is.na(Day), !is.na(SowID)) %>%
+#  mutate(SowID = factor(SowID)) 
 ```
 
 ## check how many data in each lactation day
 
 ```{r, include=TRUE, echo=TRUE}
-print(data_P1 %>%
-  group_by(Day) %>%
+print(data %>%
+  group_by(Day, Parity) %>%
   summarise(
     Count = n(),
     Mean_FI = mean(FI, na.rm = TRUE),
@@ -45,117 +48,348 @@ print(data_P1 %>%
 Since the record from Day 23-25 lower than 10, remove them.
 
 ```{r, include=TRUE, echo=TRUE}
-data_P1_trimmed <- data_P1 %>%
+data_trimmed <- data %>%
   filter(Day <= 22)
 ```
 
 Plot the original mean pattern.
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
-ggplot(data_P1, aes(x = Day, y = FI)) +
+data_trimmed %>%
+  filter(Parity == "P1")  %>%
+  ggplot(aes(x = Day, y = FI)) +
   geom_jitter(alpha = 0.2, width = 0.3) +
   geom_smooth(method = "loess", se = FALSE, color = "blue") +
-  geom_vline(xintercept = 22, linetype = "dashed", color = "red") +
-  annotate("text", x = 22, y = max(data_P1$FI), label = "Cutoff at Day 22", hjust = -0.1) +
+  labs(title = "Original pattern of P1") +
   theme_minimal()
 ```
 
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+data_trimmed %>%
+  filter(Parity == "P2")  %>%
+  ggplot(aes(x = Day, y = FI)) +
+  geom_jitter(alpha = 0.2, width = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Original pattern of P2") +
+  theme_minimal()
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+data_trimmed %>%
+  filter(Parity == "P3+")  %>%
+  ggplot(aes(x = Day, y = FI)) +
+  geom_jitter(alpha = 0.2, width = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Original pattern of P3+") +
+  theme_minimal()
+```
+
+
+
 ## ---- Method 1: GMM -----##
-**DFIi,t = [DFI0+(DFIA-DFI0)(t/k)^c]/[1+(t/k)^c]**
+**DFIi,t = DFI0+[(DFIA-DFI0)(t/k)^c]/[1+(t/k)^c]**
 DFI0: predicted DFI at day 0, DFIA is asymptotic DFI
 
 
 **1. Fixed-effects model**
 
 ```{r, include=TRUE, echo=TRUE}
-nlsLM_model <- nlsLM(
-  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
-  data = data_P1_trimmed,
-  start = list(DFI0 = 3, DFIA = 12, k = 6, c = 1.5)
+form1 <- bf(
+  FI ~ DFI0 + ((DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  DFI0 + DFIA + k + c ~ 1,
+  nl = TRUE
 )
-coef(nlsLM_model) 
+## set prior, can use get_prior(form, data_trimmed) function to check the parameter name
+priors1 <- c(
+  # DFI0 (>= 0)
+  prior(normal(3, 2), class = "b", nlpar = "DFI0", lb = 0),
+  # DFIA (>= 0)
+  prior(normal(12, 3), class = "b", nlpar = "DFIA", lb = 0),
+  # k (>= 0.1)
+  prior(normal(6, 2), class = "b", nlpar = "k", lb = 0.1),
+  # c (>= 0.5)
+  prior(normal(1.5, 0.5), class = "b", nlpar = "c", lb = 0.5)
+)
+
+## run model
+GMM_fixed <- brm(
+  formula = form1,
+  data = data_trimmed,
+  family = gaussian(),
+  prior = priors1,
+  chains = 4, cores = 4,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
 ```
 
-**2. Model with DFIA as a random effect**
+
+```{r, include=TRUE, echo=TRUE}
+summary(GMM_fixed)
+```
+
+**2. Model with DFI0 as a random effect**
 
 Start value get from the coef of previous fixed-effects model.
 Add lower bound to avoid bad prior sample.
 
 ```{r, include=TRUE, echo=TRUE}
-priors1 <- c(
-  prior(normal(7, 2), nlpar = "DFI0", lb = 0),
-  prior(normal(26, 3), nlpar = "DFIA", lb = 0),
-  prior(normal(10, 2), nlpar = "k", lb = 0.1),
-  prior(normal(3, 1), nlpar = "c", lb = 0.5),
-  prior(exponential(1), class = "sd", group = "SowID", nlpar = "DFIA")
-)
-```
-
-
-```{r, include=TRUE, echo=TRUE}
-nlme_model <- nlme(
-  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
-  data = data_P1_trimmed,
-  fixed = DFI0 + DFIA + k + c ~ 1,
-  random = DFIA ~ 1 | SowID,
-  start = c(DFI0 = 7.72, DFIA = 26.00, k = 10.20, c = 3.23)
-)
-summary(nlme_model)
-```
-
-```{r, include=TRUE, echo=TRUE}
-form <- bf(
-  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
-  DFI0 + k + c ~ 1,                # fixed effect
-  DFIA ~ 1 + (1 | SowID),          # only DFIA random
-  nl = TRUE
-)
-
-fit <- brm(
-  formula = form,
-  data = data_P1_trimmed,
-  family = gaussian(),
-  prior = priors1,
-  #sample_prior = "only",  # only sample prior to test whether can get stable prior
-  chains = 4, cores = 2,
-  control = list(adapt_delta = 0.95),
-  seed = 123
-)
-summary(fit)
-```
-**3. Model with DFIA and C as random effects**
-
-```{r, include=TRUE, echo=TRUE}
-priors2 <- c(
-  prior(normal(6.6, 0.5), nlpar = "DFI0", lb = 0),
-  prior(normal(27.5, 1.5), nlpar = "DFIA", lb = 0),
-  prior(normal(11, 1), nlpar = "k", lb = 0.1),
-  prior(normal(2, 0.3), nlpar = "c", lb = 0.5),
-  prior(exponential(1), class = "sd", group = "SowID", nlpar = "DFIA"),
-  prior(exponential(1), class = "sd", group = "SowID", nlpar = "c")
-)
-```
-
-```{r, include=TRUE, echo=TRUE}
 form2 <- bf(
-  FI ~ (DFI0 + (DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
-  DFI0 + k ~ 1,                # fixed effect
-  DFIA + c ~ 1 + (1 | SowID),          # only DFIA random
+  FI ~ DFI0 + ((DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  DFI0 ~ 1 + (1 | SowID),
+  DFIA + k + c ~ 1,
   nl = TRUE
 )
 
-fit2 <- brm(
+priors2 <- c(
+   prior(normal(7.6, 0.4), class = "b", nlpar = "DFI0", lb = 0),   # DFI0 fixed
+   prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
+   prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
+   prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
+   
+   prior(exponential(1), class = "sd", nlpar = "DFI0", group = "SowID"),
+   prior(exponential(1), class = "sigma")
+)
+```
+
+
+```{r, include=TRUE, echo=TRUE}
+GMM_dfi0 <- brm(
   formula = form2,
-  data = data_P1_trimmed,
+  data = data_trimmed,
   family = gaussian(),
   prior = priors2,
-  #sample_prior = "only",  # only sample prior to test whether can get stable prior
+  chains = 4, cores = 4,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(GMM_dfi0)
+```
+
+**3. Model with DFIA as a random effect**
+
+```{r, include=TRUE, echo=TRUE}
+form3 <- bf(
+  FI ~ DFI0 + ((DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  DFIA ~ 1 + (1 | SowID),
+  DFI0 + k + c ~ 1,
+  nl = TRUE
+)
+
+priors3 <- c(
+   prior(normal(7.6, 0.4), class = "b", nlpar = "DFI0", lb = 0),   # DFI0 fixed
+   prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
+   prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
+   prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
+   
+   prior(exponential(1), class = "sd", nlpar = "DFIA", group = "SowID"),
+   prior(exponential(1), class = "sigma")
+)
+```
+
+
+```{r, include=TRUE, echo=TRUE}
+GMM_dfiA <- brm(
+  formula = form3,
+  data = data_trimmed,
+  family = gaussian(),
+  prior = priors3,
+  chains = 4, cores = 4,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(GMM_dfiA)
+```
+
+
+
+**4. Model with DFI0, DFIA as a random effect**
+
+```{r, include=TRUE, echo=TRUE}
+form4 <- bf(
+  FI ~ DFI0 + ((DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
+  DFI0 + DFIA ~ 1 + (1 | SowID),
+  k + c ~ 1,
+  nl = TRUE
+)
+
+priors4 <- c(
+   prior(normal(7.6, 0.4), class = "b", nlpar = "DFI0", lb = 0),   # DFI0 fixed
+   prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
+   prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
+   prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
+   
+   prior(exponential(1), class = "sd", nlpar = "DFI0", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "DFIA", group = "SowID"),
+   prior(exponential(1), class = "sigma")
+)
+```
+
+
+```{r, include=TRUE, echo=TRUE}
+GMM_dfi0A <- brm(
+  formula = form4,
+  data = data_trimmed,
+  family = gaussian(),
+  prior = priors4,
   chains = 4, cores = 2,
   control = list(adapt_delta = 0.95),
   seed = 123
 )
-summary(fit2)
+summary(GMM_dfi0A)
 ```
+
+
+**5. Model with DFI0, DFIA, k=b*DFI0 as random effects**
+
+```{r, include=TRUE, echo=TRUE}
+form5 <- bf(
+  FI ~ (DFI0 + dfi0) + ((DFIA - (DFI0+ dfi0)) * (Day / (k + b*dfi0))^c) / (1 + (Day / (k + b*dfi0))^c),
+  DFI0 + k + c + b ~ 1,
+  DFIA ~ 1 + (1 | SowID), 
+  dfi0 ~ 0 + (1 | SowID),
+  nl = TRUE
+)
+
+priors5 <- c(
+   prior(normal(7.6, 0.4), class = "b", nlpar = "DFI0", lb = 0),   
+   prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
+   prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
+   prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
+   prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
+   
+   prior(exponential(1), class = "sd", nlpar = "dfi0", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "DFIA", group = "SowID"),
+   prior(exponential(1), class = "sigma")
+)
+```
+
+```{r, include=TRUE, echo=TRUE}
+GMM_dfi0Ak <- brm(
+  formula = form5,
+  data = data_trimmed,
+  family = gaussian(),
+  prior = priors5,
+  chains = 4, cores = 4,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(GMM_dfi0Ak)
+```
+
+**6. Model with DFI0, DFIA, k=b*DFA0 as random effects**
+
+```{r, include=TRUE, echo=TRUE}
+form6 <- bf(
+  FI ~ DFI0 + (((DFIA + dfia) - DFI0) * (Day / (k + b*dfia))^c) / (1 + (Day / (k + b*dfia))^c),
+  DFIA + k + c + b ~ 1,
+  DFI0 ~ 1 + (1 | SowID), 
+  dfia ~ 0 + (1 | SowID),
+  nl = TRUE
+)
+
+priors6 <- c(
+   prior(normal(7.6, 0.4), class = "b", nlpar = "DFI0", lb = 0),   
+   prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
+   prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
+   prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
+   prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
+   
+   prior(exponential(1), class = "sd", nlpar = "dfia", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "DFI0", group = "SowID"),
+   prior(exponential(1), class = "sigma")
+)
+```
+
+```{r, include=TRUE, echo=TRUE}
+GMM_dfi0Ak2 <- brm(
+  formula = form6,
+  data = data_trimmed,
+  family = gaussian(),
+  prior = priors6,
+  chains = 4, cores = 4,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(GMM_dfi0Ak2)
+```
+
+
+**7. Model with DFI0, DFIA, c=b*DFI0 as random effects**
+
+```{r, include=TRUE, echo=TRUE}
+form7 <- bf(
+  FI ~ (DFI0 + dfi0) + ((DFIA - (DFI0+ dfi0)) * (Day / k)^(c + b*dfi0)) / (1 + (Day / k)^(c + b*dfi0)),
+  DFI0 + k + c + b ~ 1,
+  DFIA ~ 1 + (1 | SowID), 
+  dfi0 ~ 0 + (1 | SowID),
+  nl = TRUE
+)
+
+priors7 <- c(
+   prior(normal(7.6, 0.4), class = "b", nlpar = "DFI0", lb = 0),   
+   prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
+   prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
+   prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
+   prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
+   
+   prior(exponential(1), class = "sd", nlpar = "dfi0", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "DFIA", group = "SowID"),
+   prior(exponential(1), class = "sigma")
+)
+```
+
+```{r, include=TRUE, echo=TRUE}
+GMM_dfi0Ac <- brm(
+  formula = form7,
+  data = data_trimmed,
+  family = gaussian(),
+  prior = priors7,
+  chains = 4, cores = 4,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(GMM_dfi0Ac)
+```
+
+**8. Model with DFI0, DFIA, c=b*DFA0 as random effects**
+
+```{r, include=TRUE, echo=TRUE}
+form8 <- bf(
+  FI ~ DFI0 + (((DFIA + dfia) - DFI0) * (Day / k)^(c + b*dfia)) / (1 + (Day / k)^(c + b*dfia)),
+  DFIA + k + c + b ~ 1,
+  DFI0 ~ 1 + (1 | SowID), 
+  dfia ~ 0 + (1 | SowID),
+  nl = TRUE
+)
+
+priors8 <- c(
+   prior(normal(7.6, 0.4), class = "b", nlpar = "DFI0", lb = 0),   
+   prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
+   prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
+   prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
+   prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
+   
+   prior(exponential(1), class = "sd", nlpar = "dfia", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "DFI0", group = "SowID"),
+   prior(exponential(1), class = "sigma")
+)
+```
+
+```{r, include=TRUE, echo=TRUE}
+GMM_dfi0Ac2 <- brm(
+  formula = form8,
+  data = data_trimmed,
+  family = gaussian(),
+  prior = priors8,
+  chains = 4, cores = 4,
+  control = list(adapt_delta = 0.95),
+  seed = 123
+)
+summary(GMM_dfi0Ac2)
+```
+
 
 ### compare the fit curve VS real data
 
@@ -191,119 +425,180 @@ Center Day by minus mean value to avoid multicollinearity issue.
 
 ```{r, include=TRUE, echo=TRUE}
 #data_P1_trimmed$Day_c <- scale(data_P1_trimmed$Day, center = TRUE, scale = FALSE)
-poly_terms <- poly(data_P1_trimmed$Day, degree = 4, raw = FALSE)
-data_P1_trimmed$t1 <- poly_terms[, 1]
-data_P1_trimmed$t2 <- poly_terms[, 2]
-data_P1_trimmed$t3 <- poly_terms[, 3]
-data_P1_trimmed$t4 <- poly_terms[, 4]
+poly_terms <- poly(data_trimmed$Day, degree = 4, raw = FALSE)
+data_trimmed$t1 <- poly_terms[, 1]
+data_trimmed$t2 <- poly_terms[, 2]
+data_trimmed$t3 <- poly_terms[, 3]
+data_trimmed$t4 <- poly_terms[, 4]
 ```
 
 
 **1. fixed-effects model**
 ```{r, include=TRUE, echo=TRUE}
-fit_fixed <- lm(FI ~ t1 + t2 + t3 + t4, data = data_P1_trimmed)
-summary(fit_fixed)
+poly_fixed <- lm(FI ~ t1 + t2 + t3 + t4, data = data_trimmed)
+summary(poly_fixed)
 ```
 
-**2. random model with t1 as random**
+Since *t4* is not significant (P-value=0.892), remove t4.
 
 ```{r, include=TRUE, echo=TRUE}
-fit_r1 <- lmer(FI ~ t1 + t2 + t3 + t4 + (0 + t1 | SowID), data = data_P1_trimmed)
-summary(fit_r1)
+poly_terms <- poly(data_trimmed$Day, degree = 3, raw = FALSE)
+data_trimmed$t1 <- poly_terms[, 1]
+data_trimmed$t2 <- poly_terms[, 2]
+data_trimmed$t3 <- poly_terms[, 3]
+poly_fixed <- lm(FI ~ t1 + t2 + t3, data = data_trimmed)
+summary(poly_fixed)
 ```
 
-**3. random model with t1,t2 as random**
+
+**2. random model with intercept as random**
 
 ```{r, include=TRUE, echo=TRUE}
-fit_r2 <- lmer(FI ~ t1 + t2 + t3 + t4 + (0 + t1 + t2 | SowID), data = data_P1_trimmed)
-summary(fit_r2)
+poly_r1 <- lmer(FI ~ t1 + t2 + t3 + (1 | SowID), data = data_trimmed)
+summary(poly_r1)
 ```
 
-**4. random model with t1,t2,t3 as random**
+**3. random model with intercept and t1 as random**
 
 ```{r, include=TRUE, echo=TRUE}
-fit_r3 <- lmer(FI ~ t1 + t2 + t3 + t4 + (0 + t1 + t2 + t3 | SowID), data = data_P1_trimmed)
-summary(fit_r3)
+poly_r2 <- lmer(FI ~ t1 + t2 + t3 + (1 + t1 | SowID), data = data_trimmed)
+
+## refit by using another optimizer
+poly_r2_refit <- update(poly_r2, control = lmerControl(optimizer = "bobyqa"))
+summary(poly_r2_refit)
 ```
+
+**4. random model with intercept and t1,t2 as random**
+
+```{r, include=TRUE, echo=TRUE}
+poly_r3 <- lmer(FI ~ t1 + t2 + t3 + (1 + t1 + t2 | SowID), data = data_trimmed)
+summary(poly_r3)
+```
+
 
 ## compare the model
 
 ```{r, include=FALSE, echo=FALSE}
-get_metrics <- function(model, type = c("lm", "lmer", "nlsLM", "brms")) {
-  type <- match.arg(type)
-
-  if (type == "lm") {
-    r <- residuals(model)
-    RSD <- sqrt(mean(r^2))
-    AIC_val <- AIC(model)
-    R2_val <- summary(model)$r.squared
-
-  } else if (type == "lmer") {
-    r <- residuals(model)
-    RSD <- sqrt(mean(r^2))
-    AIC_val <- AIC(model)
-    R2_val <- r2(model)$R2_marginal  # 使用 performance::r2
-
-  } else if (type == "nlsLM") {
-    r <- residuals(model)
-    RSD <- sqrt(mean(r^2))
-    AIC_val <- AIC(model)
-    y <- model$m$lhs()
-    yhat <- fitted(model)
-    R2_val <- 1 - sum((y - yhat)^2) / sum((y - mean(y))^2)
-
-  } else if (type == "brms") {
-    y <- model$data$FI
-    yhat <- fitted(model)[, "Estimate"]
-    r <- y - yhat
-    RSD <- sqrt(mean(r^2))
-    AIC_val <- -2 * loo(model)$estimates["elpd_loo", "Estimate"]
-    R2_val <- bayes_R2(model)[1, "Estimate"]
-  }
-
-  return(c(RSD = RSD, AIC = AIC_val, R2 = R2_val))
-}
+GMM_models <- list(GMM_fixed, GMM_dfi0, GMM_dfiA, GMM_dfi0A, GMM_dfi0Ak, GMM_dfi0Ak2, GMM_dfi0Ac, GMM_dfi0Ac2)
+##LOOIC for Bayesian model
+loo_list <- lapply(GMM_models, function(m) loo(m, moment_match = TRUE,mc.cores=4)) 
+r2_list <- lapply(GMM_models, bayes_R2)
+waic_list <- lapply(GMM_models, waic)
+rsd_list <- lapply(GMM_models, function(mod) {
+  yrep <- posterior_predict(mod)
+  residuals_mat <- sweep(yrep, 2, mod$data$FI)  # FI is Y
+  apply(residuals_mat, 1, sd) |> mean()
+})
 ```
 
 
 ```{r, include=TRUE, echo=TRUE}
-results <- data.frame(
-  Model = c(
-    "nlsLM_model",
-    "brms: fit (DFIA random)",
-    "brms: fit2 (DFIA + c random)",
-    "lm: fit_fixed (poly)",
-    "lmer: fit_r1 (t1)",
-    "lmer: fit_r2 (t1 + t2)",
-    "lmer: fit_r3 (t1 + t2 + t3)"
-  ),
-  t(sapply(list(
-    nlsLM_model,
-    fit,
-    fit2,
-    fit_fixed,
-    fit_r1,
-    fit_r2,
-    fit_r3
-  ), FUN = function(m) {
-    get_metrics(m,
-      type = if (inherits(m, "brmsfit")) "brms"
-      else if (inherits(m, "lmerMod")) "lmer"
-      else if (inherits(m, "lm")) "lm"
-      else if (inherits(m, "nls")) "nlsLM"
-    )
-  }))
+model_summary <- data.frame(
+  Model = c("GMM_fixed", "GMM_dfi0", "GMM_dfiA", "GMM_dfi0A", "GMM_dfi0Ak", "GMM_dfi0Ak2", "GMM_dfi0Ac", "GMM_dfi0Ac2"),
+  WAIC =  sapply(waic_list, function(w) w$estimates["waic", "Estimate"]),
+  R2 = sapply(r2_list, function(x) x[1, "Estimate"]),
+  RSD = unlist(rsd_list)
 )
-results_rounded <- data.frame(
-  Model = results$Model,
-  round(results[, -1], 4)  # 只对数值列做 round
-)
-print(results_rounded)
+
+print(model_summary)
 ```
+
+
+```{r, include=TRUE, echo=TRUE}
+poly_models <- list(poly_fixed, poly_r1, poly_r2_refit, poly_r3)
+r2_list <- lapply(poly_models, r2)
+
+poly_model_summary <- data.frame(
+  Model = c("poly_fixed", paste0("poly_r", 1:3)),
+  AIC = sapply(poly_models, AIC),
+  R2 = sapply(seq_along(r2_list), function(i) {
+    r2 <- r2_list[[i]]
+    if (!is.null(r2$R2)) {
+      return(r2$R2)  # 固定效应模型
+    } else if (!is.null(r2$R2_conditional)) {
+      return(r2$R2_conditional)  # 随机效应模型
+    } else {
+      return(NA)
+    }
+  }),
+  RSD = sapply(poly_models, function(m) {sqrt(mean(residuals(m)^2))})
+)
+poly_model_summary
+```
+
+## Calculate the mean effect group by Parity
+
+*1. Based on best poly model: poly_r3 <- lmer(FI ~ t1 + t2 + t3 + (1 + t1 + t2 | SowID), data = data_trimmed)
+
+```{r, include=TRUE, echo=TRUE}
+fix_eff <- fixef(poly_r3)
+ran_eff <- ranef(poly_r3)$SowID %>%
+  rownames_to_column(var = "SowID")
+
+sow_parity <- data_trimmed %>%
+  select(SowID, Parity) %>%
+  mutate(SowID = as.character(SowID)) %>%
+  distinct()
+
+individual_effects <- ran_eff %>%
+  mutate(
+    Intercept_total = `(Intercept)` + fix_eff["(Intercept)"],
+    t1_total = t1 + fix_eff["t1"],
+    t2_total = t2 + fix_eff["t2"]
+  ) %>%
+  select(SowID, Intercept_total, t1_total, t2_total) %>%
+  left_join(sow_parity, by = "SowID")
+```
+
+```{r, include=TRUE, echo=TRUE}
+group_means <- individual_effects %>%
+  group_by(Parity) %>%
+  summarise(
+    mean_Intercept = mean(Intercept_total),
+    mean_t1 = mean(t1_total),
+    mean_t2 = mean(t2_total),
+    .groups = "drop"
+  )
+print(group_means)
+```
+
+*2. Based on best GMM model: GMM_dfi0Ac2
+
+```{r, include=TRUE, echo=TRUE}
+fixef_df <- fixef(GMM_dfi0Ac2)
+DFI0_fixed <- fixef_df["DFI0_Intercept", "Estimate"]
+
+re_summary <- as.data.frame(ranef(GMM_dfi0Ac2, summary = TRUE)$SowID[, "Estimate", ])
+re_summary$SowID <- rownames(re_summary)
+
+individual_effects2 <- re_summary %>%
+  mutate(
+    DFI0_total = DFI0_Intercept + DFI0_fixed,
+    dfia_total = fixef_df["DFIA_Intercept", "Estimate"] + dfia_Intercept,
+    C_total = fixef_df["c_Intercept", "Estimate"] + fixef_df["b_Intercept", "Estimate"] * dfia_Intercept
+  ) %>%
+  left_join(sow_parity, by = "SowID")
+```
+
+```{r, include=TRUE, echo=TRUE}
+group_summary2 <- individual_effects2 %>%
+  group_by(Parity) %>%
+  summarise(
+    mean_DFI0 = mean(DFI0_total, na.rm = TRUE),
+    mean_dfia = mean(dfia_total, na.rm = TRUE),
+    mean_C = mean(C_total, na.rm = TRUE),
+    n = n()
+  )
+print(group_summary2)
+```
+
 
 
 ```{r, include=TRUE, echo=TRUE}
 
 ```
+
+
+
 
 
