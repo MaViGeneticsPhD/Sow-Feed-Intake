@@ -208,9 +208,9 @@ summary(GMM_dfiA)
 
 ```{r, include=TRUE, echo=TRUE}
 form4 <- bf(
-  FI ~ DFI0 + ((DFIA - DFI0) * (Day / k)^c) / (1 + (Day / k)^c),
-  DFI0 + DFIA ~ 1 + (1 | SowID),
-  k + c ~ 1,
+  FI ~ (DFI0 + dfi0) + (((DFIA + dfiA) - (DFI0 + dfi0)) * (Day / k)^c) / (1 + (Day / k)^c),
+  dfi0 + dfiA ~ 0 + (1 | p | SowID),    ## (1 | p | SowID) can estimate covariance
+  DFI0 + DFIA + k + c ~ 1,
   nl = TRUE
 )
 
@@ -220,8 +220,8 @@ priors4 <- c(
    prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
    prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
    
-   prior(exponential(1), class = "sd", nlpar = "DFI0", group = "SowID"),
-   prior(exponential(1), class = "sd", nlpar = "DFIA", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "dfi0", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "dfiA", group = "SowID"),
    prior(exponential(1), class = "sigma")
 )
 ```
@@ -238,6 +238,7 @@ GMM_dfi0A <- brm(
   seed = 123
 )
 summary(GMM_dfi0A)
+VarCorr(GMM_dfi0A, summary = TRUE)
 ```
 
 
@@ -245,10 +246,9 @@ summary(GMM_dfi0A)
 
 ```{r, include=TRUE, echo=TRUE}
 form5 <- bf(
-  FI ~ (DFI0 + dfi0) + ((DFIA - (DFI0+ dfi0)) * (Day / (k + b*dfi0))^c) / (1 + (Day / (k + b*dfi0))^c),
-  DFI0 + k + c + b ~ 1,
-  DFIA ~ 1 + (1 | SowID), 
-  dfi0 ~ 0 + (1 | SowID),
+  FI ~ (DFI0 + dfi0) + (((DFIA+ dfiA) - (DFI0+ dfi0)) * (Day / (k + b*dfi0))^c) / (1 + (Day / (k + b*dfi0))^c),
+  DFI0 + DFIA + k + c + b ~ 1,
+  dfi0 + dfiA ~ 0 + (1 | p | SowID),
   nl = TRUE
 )
 
@@ -260,7 +260,7 @@ priors5 <- c(
    prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
    
    prior(exponential(1), class = "sd", nlpar = "dfi0", group = "SowID"),
-   prior(exponential(1), class = "sd", nlpar = "DFIA", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "dfiA", group = "SowID"),
    prior(exponential(1), class = "sigma")
 )
 ```
@@ -282,10 +282,9 @@ summary(GMM_dfi0Ak)
 
 ```{r, include=TRUE, echo=TRUE}
 form6 <- bf(
-  FI ~ DFI0 + (((DFIA + dfia) - DFI0) * (Day / (k + b*dfia))^c) / (1 + (Day / (k + b*dfia))^c),
-  DFIA + k + c + b ~ 1,
-  DFI0 ~ 1 + (1 | SowID), 
-  dfia ~ 0 + (1 | SowID),
+  FI ~ (DFI0 + dfi0) + (((DFIA + dfia) - (DFI0 + dfi0)) * (Day / (k + b*dfia))^c) / (1 + (Day / (k + b*dfia))^c),
+  DFI0 + DFIA + k + c + b ~ 1,
+  dfi0 + dfiA ~ 0 + (1 | p | SowID),
   nl = TRUE
 )
 
@@ -297,7 +296,7 @@ priors6 <- c(
    prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
    
    prior(exponential(1), class = "sd", nlpar = "dfia", group = "SowID"),
-   prior(exponential(1), class = "sd", nlpar = "DFI0", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "dfi0", group = "SowID"),
    prior(exponential(1), class = "sigma")
 )
 ```
@@ -320,10 +319,9 @@ summary(GMM_dfi0Ak2)
 
 ```{r, include=TRUE, echo=TRUE}
 form7 <- bf(
-  FI ~ (DFI0 + dfi0) + ((DFIA - (DFI0+ dfi0)) * (Day / k)^(c + b*dfi0)) / (1 + (Day / k)^(c + b*dfi0)),
-  DFI0 + k + c + b ~ 1,
-  DFIA ~ 1 + (1 | SowID), 
-  dfi0 ~ 0 + (1 | SowID),
+  FI ~ (DFI0 + dfi0) + (((DFIA + dfiA) - (DFI0+ dfi0)) * (Day / k)^(c + b*dfi0)) / (1 + (Day / k)^(c + b*dfi0)),
+  DFI0 + DFIA + k + c + b ~ 1,
+  dfi0 + dfiA ~ 0 + (1 | p | SowID),
   nl = TRUE
 )
 
@@ -332,10 +330,10 @@ priors7 <- c(
    prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
    prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
    prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
-   prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
+   prior(normal(0.3, 0.1), class = "b", nlpar = "b"),
    
    prior(exponential(1), class = "sd", nlpar = "dfi0", group = "SowID"),
-   prior(exponential(1), class = "sd", nlpar = "DFIA", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "dfiA", group = "SowID"),
    prior(exponential(1), class = "sigma")
 )
 ```
@@ -357,10 +355,9 @@ summary(GMM_dfi0Ac)
 
 ```{r, include=TRUE, echo=TRUE}
 form8 <- bf(
-  FI ~ DFI0 + (((DFIA + dfia) - DFI0) * (Day / k)^(c + b*dfia)) / (1 + (Day / k)^(c + b*dfia)),
-  DFIA + k + c + b ~ 1,
-  DFI0 ~ 1 + (1 | SowID), 
-  dfia ~ 0 + (1 | SowID),
+  FI ~ (DFI0 + dfi0) + (((DFIA + dfia) - (DFI0 + dfi0)) * (Day / k)^(c + b*dfia)) / (1 + (Day / k)^(c + b*dfia)),
+  DFI0 + DFIA + k + c + b ~ 1,
+  dfi0 + dfia ~ 0 + (1 | p | SowID),
   nl = TRUE
 )
 
@@ -369,10 +366,10 @@ priors8 <- c(
    prior(normal(21.4, 1.0), class = "b", nlpar = "DFIA", lb = 0),
    prior(normal(9.7, 0.5), class = "b", nlpar = "k", lb = 0.1),
    prior(normal(2.3, 0.3), class = "b", nlpar = "c", lb = 0.5),
-   prior(normal(0.3, 0.1), class = "b", nlpar = "b", lb = 0),
+   prior(normal(0.3, 0.1), class = "b", nlpar = "b"),
    
    prior(exponential(1), class = "sd", nlpar = "dfia", group = "SowID"),
-   prior(exponential(1), class = "sd", nlpar = "DFI0", group = "SowID"),
+   prior(exponential(1), class = "sd", nlpar = "dfi0", group = "SowID"),
    prior(exponential(1), class = "sigma")
 )
 ```
@@ -485,9 +482,7 @@ loo_list <- lapply(GMM_models, function(m) loo(m, moment_match = TRUE,mc.cores=4
 r2_list <- lapply(GMM_models, bayes_R2)
 waic_list <- lapply(GMM_models, waic)
 rsd_list <- lapply(GMM_models, function(mod) {
-  yrep <- posterior_predict(mod)
-  residuals_mat <- sweep(yrep, 2, mod$data$FI)  # FI is Y
-  apply(residuals_mat, 1, sd) |> mean()
+  posterior_summary(mod, variable = "sigma")["sigma", "Estimate"]  # RSD
 })
 ```
 
@@ -502,6 +497,33 @@ model_summary <- data.frame(
 
 print(model_summary)
 ```
+
+Extract the SE of Var(e).
+
+```{r, include=TRUE, echo=TRUE}
+extract_var_e <- function(mod) {
+  draws <- as_draws_df(mod)
+  
+  if (!"sigma" %in% colnames(draws)) {
+    warning("No 'sigma' parameter found in model.")
+    return(data.frame(Var_e = NA, SE = NA))
+  }
+
+  sigma_draws <- draws$sigma
+  var_e_draws <- sigma_draws^2
+  
+  data.frame(
+    Var_e = mean(var_e_draws),
+    SE = sd(var_e_draws)
+  )
+}
+var_e_results <- do.call(rbind, lapply(GMM_models, extract_var_e))
+var_e_results$Model <- c("GMM_fixed", "GMM_dfi0", "GMM_dfiA", "GMM_dfi0A", "GMM_dfi0Ak", "GMM_dfi0Ak2", "GMM_dfi0Ac", "GMM_dfi0Ac2")
+print(var_e_results)
+```
+
+
+
 
 
 ```{r, include=TRUE, echo=TRUE}
@@ -521,10 +543,43 @@ poly_model_summary <- data.frame(
       return(NA)
     }
   }),
-  RSD = sapply(poly_models, function(m) {sqrt(mean(residuals(m)^2))})
+  RSD = sapply(poly_models, function(m) {summary(m)$sigma})
 )
 poly_model_summary
 ```
+
+Extract the SE of Var(e).
+
+```{r, include=TRUE, echo=TRUE}
+extract_var_e_lm <- function(model_list, model_names = NULL) {
+  results <- lapply(model_list, function(m) {
+    sigma <- summary(m)$sigma
+    n <- nobs(m)
+    p <- length(coef(m))
+    df_residual <- n - p
+
+    var_e <- sigma^2
+    se_var_e <- var_e * sqrt(2 / df_residual)
+
+    data.frame(Var_e = var_e, SE = se_var_e)
+  })
+
+  results_df <- do.call(rbind, results)
+  if (!is.null(model_names)) {
+    results_df$Model <- model_names
+  } else {
+    results_df$Model <- paste0("Model_", seq_along(model_list))
+  }
+
+  return(results_df)
+}
+residual_var_results <- extract_var_e_lm(poly_models, 
+                                         c("poly_fixed", "poly_r1", "poly_r2_refit", "poly_r3"))
+print(residual_var_results)
+```
+
+
+
 
 ## Calculate the mean effect group by Parity
 
