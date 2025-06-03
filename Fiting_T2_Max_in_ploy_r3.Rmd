@@ -1,0 +1,193 @@
+---
+title: "Temperature Effect on SowFI model"
+author: "ANSC 595"
+date: "2025-05-30"
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(nlme)
+library(lme4)
+library(AICcmodavg)
+library(ggplot2)
+```
+
+```{r data preparation, include=FALSE}
+# Load the data
+data <- read.csv("C:/Users/mavi/OneDrive - purdue.edu/SUMMER 2025/PIG MODELING/sow_FI_weather.csv")
+data$SowID <- as.factor(data$SowID)
+data$Parity <- as.factor(data$Parity)
+
+# Trim data to first 22 days
+data_trimmed <- data %>%
+  filter(Day <= 22)
+```
+
+```{r best model so far, include=F}
+# using the best model for SowFI so far - poly_r3
+poly_terms <- poly(data_trimmed$Day, degree = 3, raw = FALSE)
+data_trimmed$t1 <- poly_terms[, 1]
+data_trimmed$t2 <- poly_terms[, 2]
+data_trimmed$t3 <- poly_terms[, 3]
+```
+
+```{r, include=TRUE}
+# best model to fit sow feed intake data so far
+poly_r3 <- lmer(FI ~ t1 + t2 + t3 + (1 + t1 + t2 | SowID), data = data_trimmed)
+summary(poly_r3)
+```
+```{r}
+# Temperature effects in sow feed intake model
+# Building upon poly_r3 model
+
+# Calculate mean temperature for centering (Temp - meanTemp)
+# using col MAX_T2M
+mean_temp <- mean(data_trimmed$Max_T2M, na.rm = TRUE)
+data_trimmed$temp_centered <- data_trimmed$Max_T2M - mean_temp
+
+# Model 1: baseline for comparison
+#poly_r3 <- lmer(FI ~ t1 + t2 + t3 + (1 + t1 + t2 | SowID), data = data_trimmed)
+
+# Model 2: temperature constant across days
+poly_temp1 <- lmer(FI ~ t1 + t2 + t3 + temp_centered + 
+                     (1 + t1 + t2 | SowID), data = data_trimmed)
+
+# Model 3: remperature interacting linear
+poly_temp2 <- lmer(FI ~ t1 + t2 + t3 + temp_centered + t1:temp_centered + 
+                     (1 + t1 + t2 | SowID), data = data_trimmed)
+
+# Model 4: temperature interacting with all polynomial terms
+poly_temp3 <- lmer(FI ~ t1 + t2 + t3 + temp_centered + 
+                     t1:temp_centered + t2:temp_centered + t3:temp_centered + 
+                     (1 + t1 + t2 | SowID), data = data_trimmed)
+
+# Model 5: Random temperature effect (individual sensitivity to temperature)
+# did not converge
+#poly_temp4 <- lmer(FI ~ t1 + t2 + t3 + temp_centered + 
+#                     (1 + t1 + t2 + temp_centered | SowID), data = data_trimmed)
+
+
+# models list 
+models <- list(
+  "Original" = poly_r3,
+  "Temp_main" = poly_temp1,
+  "Temp_x_linear" = poly_temp2,
+  "Temp_x_all" = poly_temp3
+)
+```
+```{r echo=FALSE}
+
+# R-squared function
+R2 <- function(y_actual, y_predict) {
+  cor(y_actual, y_predict)^2
+}
+
+# model comparison function
+compare_models <- function(model_list, data) {
+  comparison <- data.frame(
+    Model = names(model_list),
+    AIC = sapply(model_list, AIC),
+    RSD = sapply(model_list, sigma),
+    R_squared = numeric(length(model_list))
+  )
+  
+  # Calculate R-squared for each model
+  for(i in seq_along(model_list)) {
+    model_data <- model.frame(model_list[[i]])
+    actual_vals <- model.response(model_data)
+    fitted_vals <- fitted(model_list[[i]])
+    comparison$R_squared[i] <- R2(actual_vals, fitted_vals)
+  }
+  
+  # Order by AIC
+  comparison <- comparison[order(comparison$AIC), ]
+  return(comparison)
+}
+```
+```{r echo=FALSE}
+# Compare all models
+model_comparison <- compare_models(models, data_trimmed)
+print(model_comparison)
+
+# Detailed summary of best model
+best_model_name <- model_comparison$Model[1]
+best_model <- models[[best_model_name]]
+cat("Model:", best_model_name, "\n\n")
+summary(best_model)
+```
+```{r echo=FALSE}
+
+# Visualize temperature effects
+
+# Create prediction data for visualization
+temp_range <- seq(min(data_trimmed$Max_T2M), max(data_trimmed$Max_T2M), length.out = 50)
+day_range <- seq(1, 22, by = 1)
+
+# Create predictions with temperature effects
+create_temp_predictions <- function(model, temp_vals, days) {
+  # Create polynomial terms for prediction days
+  poly_pred <- poly(days, degree = 3, raw = FALSE)
+  
+  pred_data <- expand.grid(
+    Day = days,
+    Temperature = temp_vals
+  )
+  
+  pred_data$temp_centered <- pred_data$Temperature - mean_temp
+  pred_data$t1 <- rep(poly_pred[, 1], length(temp_vals))
+  pred_data$t2 <- rep(poly_pred[, 2], length(temp_vals))
+  pred_data$t3 <- rep(poly_pred[, 3], length(temp_vals))
+  
+  # Add dummy SowID for prediction (using random effect = 0)
+  pred_data$SowID <- factor("dummy")
+  
+  # Predict (this will give population-level predictions)
+  pred_data$predicted_FI <- predict(model, newdata = pred_data, re.form = ~0)
+  
+  return(pred_data)
+}
+
+# Create predictions for visualization (using best temperature model)
+if(best_model_name != "Original") {
+  pred_data <- create_temp_predictions(best_model, 
+                                       c(18, 24, 26, 30), # Different temperatures
+                                       day_range)
+  
+  # Plot temperature effects over lactation
+  temp_plot <- ggplot(pred_data, aes(x = Day, y = predicted_FI, color = factor(Temperature))) +
+    geom_line(size = 1.2) +
+    labs(title = "Predicted Feed Intake by Temperature and Lactation Day",
+         subtitle = paste("Best Model:", best_model_name),
+         x = "Days of Lactation",
+         y = "Predicted Feed Intake (kg/day)",
+         color = "Temperature (°C)") +
+    theme_minimal() +
+    scale_color_viridis_d()
+  
+  print(temp_plot)
+}
+
+```
+```{r echo=FALSE}
+
+# Temperature effect interpretation
+cat("\n=== TEMPERATURE EFFECT INTERPRETATION ===\n")
+if(best_model_name == "Temp_main") {
+  cat("Temperature has a CONSTANT effect across all lactation days\n")
+} else if(grepl("x", best_model_name)) {
+  cat("Temperature effect VARIES across lactation days (interaction)\n")
+} else if(grepl("Random", best_model_name)) {
+  cat("Individual sows have different SENSITIVITY to temperature\n")
+}
+
+# Calculate temperature coefficient (if main effect present)
+if(best_model_name != "Original") {
+  temp_coef <- fixef(best_model)["temp_centered"]
+  cat("Temperature coefficient:", round(temp_coef, 4), "\n")
+  cat("Interpretation: Each 1°C increase in temperature changes FI by", 
+      round(temp_coef, 4), "kg/day\n")
+}
+```
