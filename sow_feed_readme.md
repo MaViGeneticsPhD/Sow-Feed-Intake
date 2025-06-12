@@ -59,13 +59,13 @@ library(xgboost)      # Gradient boosting algorithm
 
 4. **Categorical Features**:
    - **Lactation Phase**: "early" (days 1-7), "mid" (days 8-14), "late" (days 15+)
-   - **Parity Group**: "first", "second", "third or higher" time mothers
+   - **Parity Group**: "first", "second", "third or higher" 
 
 **Why These Features Matter**:
 - Lactation day patterns: Feed intake typically increases early, peaks mid-lactation, then decreases
-- Weather effects: Hot weather reduces appetite
+- Weather effects: Hot weather reduces FI
 - Individual sow patterns: Each sow has unique eating habits
-- Parity effects: First-time mothers eat differently than experienced ones
+- Parity effects: First-time sows eat differently than older sows
 
 ### 3. Three Modeling Approaches
 
@@ -82,7 +82,7 @@ fit_polynomial_model <- function(train_data) {
 - Uses mathematical curves to model feed intake over time
 - Accounts for weather effects (dew point interactions)
 - Includes "random effects" - each sow can have her own unique pattern
-- This is a "mixed-effects" model that handles repeated measurements per sow
+- It handles repeated measurements 
 
 **Strengths**: Interpretable, handles individual sow differences well
 **Weaknesses**: May miss complex non-linear patterns
@@ -105,7 +105,7 @@ fit_random_forest <- function(train_data, features) {
 **How it works**: 
 1. Tree 1 might say: "If it's day 10 and temp > 20°C, predict 5.5kg"
 2. Tree 2 might say: "If it's a first-time mother on day 10, predict 4.8kg"
-3. Average all 500 tree predictions for final answer
+3. Average all 500 tree predictions for final answer - this value was chosen based on this dataset
 
 **Strengths**: Handles complex patterns, resistant to overfitting
 **Weaknesses**: Less interpretable, can't extrapolate beyond training data
@@ -283,20 +283,3 @@ plots$comparison  # View model comparison
 - Maximum prediction accuracy is needed
 - You have large datasets
 - You can invest time in parameter tuning
-
-## Extensions and Improvements
-
-**Potential Enhancements**:
-1. **Time Series Features**: Seasonal patterns, weekly cycles
-2. **Sow Characteristics**: Body weight, breed, health status
-3. **Feed Composition**: Protein content, energy density
-4. **Environmental Factors**: Humidity, ventilation, lighting
-5. **Behavioral Indicators**: Activity levels, feeding frequency
-
-**Advanced Techniques**:
-- Ensemble methods combining all three models
-- Deep learning for complex pattern recognition
-- Bayesian methods for uncertainty quantification
-- Real-time prediction updates
-
-This pipeline provides a solid foundation for feed intake prediction while being flexible enough to accommodate different data scenarios and requirements.
