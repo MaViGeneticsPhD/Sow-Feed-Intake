@@ -188,32 +188,6 @@ fit_xgboost <- function(train_data, features) {
    - Points close to diagonal line = good predictions
    - Scattered points = poor predictions
 
-## How to Use This Code
-
-### Basic Usage:
-```r
-# 1. Load your data
-sow_data <- read.csv("your_sow_data.csv")
-
-# 2. Run the complete pipeline
-results <- run_feed_intake_pipeline(sow_data)
-
-# 3. View model comparison
-print(results$comparison)
-
-# 4. Make tomorrow's predictions
-current_data <- sow_data %>% 
-  group_by(sow_id) %>% 
-  slice_max(lactation_day, n = 1)
-
-tomorrow_predictions <- predict_tomorrow_intake(results, current_data)
-print(tomorrow_predictions)
-
-# 5. Create visualizations
-plots <- create_prediction_plots(results)
-plots$comparison  # View model comparison
-```
-
 ### Expected Output:
 
 **Model Comparison Table**:
@@ -267,19 +241,3 @@ plots$comparison  # View model comparison
 - Ensure lactation_day and other predictors are reasonable
 - Consider adding more relevant features
 
-## Model Selection Guidance
-
-**Choose Polynomial Model When**:
-- You need interpretable results
-- You have relatively simple patterns
-- You want to understand individual sow effects
-
-**Choose Random Forest When**:
-- You have complex, non-linear patterns
-- You want robust predictions
-- Interpretability is less important
-
-**Choose XGBoost When**:
-- Maximum prediction accuracy is needed
-- You have large datasets
-- You can invest time in parameter tuning
