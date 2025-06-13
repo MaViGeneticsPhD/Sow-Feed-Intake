@@ -31,12 +31,8 @@ Your input CSV file (`sow_data.csv`) should contain these columns:
 library(tidyverse)    # Data manipulation and visualization
 library(randomForest) # Random Forest machine learning
 library(caret)        # Machine learning toolkit
-library(xgboost)      # Gradient boosting algorithm
 # ... other libraries
 ```
-
-**What it does**: Loads all the necessary tools for data processing, machine learning, and visualization.
-
 ### 2. Data Preparation (`prepare_data` function)
 
 **Purpose**: Transforms raw data into features that machine learning models can use effectively.
@@ -44,15 +40,14 @@ library(xgboost)      # Gradient boosting algorithm
 **Key Transformations**:
 
 1. **Polynomial Terms**: Creates mathematical curves (t1, t2, t3) to capture how feed intake changes over lactation days
-   - t1: Linear trend (straight line)
-   - t2: Quadratic trend (curved)
-   - t3: Cubic trend (more complex curve)
+   - t1: Linear trend
+   - t2: Quadratic 
+   - t3: Cubic 
 
 2. **Lagged Variables**: Yesterday's values become today's predictors
-   - `prev_feed_intake`: How much the sow ate yesterday
-   - `prev_temperature`: Yesterday's temperature
-   - This helps because past conditions influence current behavior
-
+   - `prev_feed_intake`
+   - `prev_temperature`
+   
 3. **Moving Averages**: 3-day averages to smooth out daily variations
    - `ma3_feed`: Average feed intake over last 3 days
    - `ma3_temp`: Average temperature over last 3 days
@@ -61,15 +56,10 @@ library(xgboost)      # Gradient boosting algorithm
    - **Lactation Phase**: "early" (days 1-7), "mid" (days 8-14), "late" (days 15+)
    - **Parity Group**: "first", "second", "third or higher" 
 
-**Why These Features Matter**:
-- Lactation day patterns: Feed intake typically increases early, peaks mid-lactation, then decreases
-- Weather effects: Hot weather reduces FI
-- Individual sow patterns: Each sow has unique eating habits
-- Parity effects: First-time sows eat differently than older sows
+### 3. Modeling Approaches
 
-### 3. Three Modeling Approaches
-
-#### A. Polynomial Model (Traditional Statistical Approach)
+#### A. Polynomial Model 
+      (with 3 random effects and dew point as cov (interacting with lactation day)
 ```r
 fit_polynomial_model <- function(train_data) {
   model <- lmer(daily_feed_intake ~ t1 + t2 + t3 + dew_scaled + 
@@ -79,13 +69,11 @@ fit_polynomial_model <- function(train_data) {
 ```
 
 **What it does**: 
-- Uses mathematical curves to model feed intake over time
-- Accounts for weather effects (dew point interactions)
+- model feed intake over time (up to 22d)
+- Accounts for environmental effects (dew point interactions)
 - Includes "random effects" - each sow can have her own unique pattern
 - It handles repeated measurements 
 
-**Strengths**: Interpretable, handles individual sow differences well
-**Weaknesses**: May miss complex non-linear patterns
 
 #### B. Random Forest Model
 ```r
@@ -97,7 +85,7 @@ fit_random_forest <- function(train_data, features) {
 ```
 
 **What it does**:
-- Creates 500 "decision trees" that each make predictions
+- Creates 500 "decision trees" that each make predictions - this value was chosen based on sample size for this data
 - Each tree uses random subsets of data and features
 - Final prediction is the average of all trees
 - Can automatically detect complex patterns and interactions
@@ -105,34 +93,11 @@ fit_random_forest <- function(train_data, features) {
 **How it works**: 
 1. Tree 1 might say: "If it's day 10 and temp > 20°C, predict 5.5kg"
 2. Tree 2 might say: "If it's a first-time mother on day 10, predict 4.8kg"
-3. Average all 500 tree predictions for final answer - this value was chosen based on this dataset
+3. Average all 500 tree predictions for final answer 
 
 **Strengths**: Handles complex patterns, resistant to overfitting
-**Weaknesses**: Less interpretable, can't extrapolate beyond training data
+**Weaknesses**: Less interpretable, can't extrapolate beyond training data...
 
-#### C. XGBoost Model
-```r
-fit_xgboost <- function(train_data, features) {
-  xgb_model <- xgboost(data = train_matrix,
-                      label = train_for_xgb$daily_feed_intake,
-                      nrounds = 100, ...)
-}
-```
-
-**What it does**:
-- Builds models sequentially - each new model corrects previous mistakes
-- Starts with simple prediction, then adds complexity iteratively
-- Very powerful for prediction competitions
-
-**How it works**:
-1. Model 1: Makes basic predictions
-2. Model 2: Focuses on correcting Model 1's biggest errors
-3. Model 3: Corrects remaining errors from Models 1+2
-4. Continues for 100 rounds
-5. Final prediction combines all models
-
-**Strengths**: Often highest accuracy, handles missing data well
-**Weaknesses**: Can overfit, requires careful tuning
 
 ### 4. Model Evaluation (`evaluate_model` function)
 
@@ -150,11 +115,7 @@ fit_xgboost <- function(train_data, features) {
 
 3. **R² (R-squared)**:
    - Proportion of variance explained (0-1 scale)
-   - Higher is better (1 = perfect predictions)
-
-**Example Interpretation**:
-- RMSE = 0.5 means predictions are typically within ±0.5 kg/day
-- R² = 0.85 means the model explains 85% of the variation in feed intake
+   - Higher is better 
 
 ### 5. Main Pipeline (`run_feed_intake_pipeline` function)
 
@@ -188,23 +149,6 @@ fit_xgboost <- function(train_data, features) {
    - Points close to diagonal line = good predictions
    - Scattered points = poor predictions
 
-### Expected Output:
-
-**Model Comparison Table**:
-```
-        Model      RMSE       MAE R_squared
-1  Polynomial 0.421833 0.3156045 0.8234567
-2 Random Forest 0.398765 0.2987654 0.8456789
-3     XGBoost 0.387432 0.2876543 0.8567890
-```
-
-**Tomorrow's Predictions**:
-```
-  sow_id current_day predicted_next_day_intake  model_used
-1      1          15                  5.234567     XGBoost
-2      2          12                  6.123456     XGBoost
-3      3          18                  4.567890     XGBoost
-```
 
 ## Key Features
 
