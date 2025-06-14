@@ -1,18 +1,8 @@
-# Sow Feed Intake Prediction Pipeline - Detailed README
-
-## Overview
-
-This R script creates a comprehensive machine learning pipeline to predict daily feed intake for sows (female pigs) during lactation. The system compares three different modeling approaches to find the best method for predicting how much feed a sow will consume on any given day.
-
-## What This Code Does
-
-**Main Purpose**: Predict how much feed sows will eat tomorrow based on their current conditions and historical data.
-
-**Business Value**: Helps farmers optimize feed management, reduce waste, and ensure proper nutrition for lactating sows.
+# Sow Feed Intake Prediction Pipeline - README
 
 ## Required Data Structure
 
-Your input CSV file (`sow_data.csv`) should contain these columns:
+Input CSV file (`sow_data.csv`) that should contain these columns:
 
 | Column Name | Description | Example Values |
 |-------------|-------------|----------------|
@@ -37,12 +27,7 @@ library(caret)        # Machine learning toolkit
 
 **Purpose**: Transforms raw data into features that machine learning models can use effectively.
 
-**Key Transformations**:
-
 1. **Polynomial Terms**: Creates mathematical curves (t1, t2, t3) to capture how feed intake changes over lactation days
-   - t1: Linear trend
-   - t2: Quadratic 
-   - t3: Cubic 
 
 2. **Lagged Variables**: Yesterday's values become today's predictors
    - `prev_feed_intake`
@@ -67,13 +52,10 @@ fit_polynomial_model <- function(train_data) {
                 (1 + t1 + t2|sow_id), data = train_data)
 }
 ```
-
 **What it does**: 
 - model feed intake over time (up to 22d)
 - Accounts for environmental effects (dew point interactions)
 - Includes "random effects" - each sow can have her own unique pattern
-- It handles repeated measurements 
-
 
 #### B. Random Forest Model
 ```r
@@ -85,19 +67,11 @@ fit_random_forest <- function(train_data, features) {
 ```
 
 **What it does**:
-- Creates 500 "decision trees" that each make predictions - this value was chosen based on sample size for this data
-- Each tree uses random subsets of data and features
-- Final prediction is the average of all trees
-- Can automatically detect complex patterns and interactions
-
-**How it works**: 
-1. Tree 1 might say: "If it's day 10 and temp > 20°C, predict 5.5kg"
-2. Tree 2 might say: "If it's a first-time mother on day 10, predict 4.8kg"
-3. Average all 500 tree predictions for final answer 
+- Creates 500 "decision trees" that each make predictions # for future: test the optimum value of decision treess
+- Each tree uses random subsets of data and features and final prediction is the average of all trees
 
 **Strengths**: Handles complex patterns, resistant to overfitting
 **Weaknesses**: Less interpretable, can't extrapolate beyond training data...
-
 
 ### 4. Model Evaluation (`evaluate_model` function)
 
@@ -124,13 +98,13 @@ fit_random_forest <- function(train_data, features) {
 1. **Data Validation**: Checks if required columns exist
 2. **Data Preparation**: Applies all feature engineering
 3. **Train/Test Split**: 80% for training, 20% for testing
-4. **Model Training**: Fits all three model types
+4. **Model Training**: Fits all model types
 5. **Model Evaluation**: Tests performance on unseen data
 6. **Comparison**: Ranks models by performance metrics
 
 **Error Handling**: If any model fails, the pipeline continues with successful models.
 
-### 6. Prediction Function (`predict_tomorrow_intake`)
+### 6. Prediction Function (`predict_tomorrow_intake`) - IT'S NOT WORKING YET!!!!
 
 **Purpose**: Use the best-performing model to predict next-day feed intake.
 
@@ -142,12 +116,8 @@ fit_random_forest <- function(train_data, features) {
 
 ### 7. Visualization (`create_prediction_plots`)
 
-**Creates Four Types of Plots**:
-
 1. **Model Comparison**: Bar charts comparing RMSE, MAE, and R² across models
 2. **Actual vs Predicted Scatter Plots**: One for each model type
-   - Points close to diagonal line = good predictions
-   - Scattered points = poor predictions
 
 
 ## Key Features
@@ -164,24 +134,4 @@ fit_random_forest <- function(train_data, features) {
 - **Weather Integration**: Includes temperature and humidity effects
 - **Lag Features**: Uses historical values as predictors
 
-## Common Issues and Solutions
-
-### 1. "Missing required columns" Error
-**Problem**: Your CSV doesn't have the expected column names
-**Solution**: Check your column names match exactly (case-sensitive)
-
-### 2. "Insufficient data for training" Error
-**Problem**: Too few complete observations
-**Solution**: Ensure you have at least 20 rows with non-missing values
-
-### 3. All Models Fail
-**Problem**: Data quality issues or missing critical features
-**Solution**: Check data types, ensure numeric columns are actually numeric
-
-### 4. Poor Model Performance
-**Problem**: R² < 0.5, high RMSE
-**Solutions**: 
-- Check for outliers in feed intake data
-- Ensure lactation_day and other predictors are reasonable
-- Consider adding more relevant features
 
